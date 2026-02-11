@@ -14,6 +14,7 @@ export default function Layout() {
         tabBarInactiveTintColor: "#666",
       }}
     >
+      {/* TAB: Alarmas */}
       <Tabs.Screen
         name="index"
         options={{
@@ -24,8 +25,17 @@ export default function Layout() {
         }}
       />
 
+      {/* TAB OCULTO: Nueva alarma */}
       <Tabs.Screen
-        name="explore"
+        name="newAlarm"
+        options={{
+          href: null, // 👈 oculto del tab bar
+        }}
+      />
+
+      {/* TAB: Ajustes (opcional) */}
+      <Tabs.Screen
+        name="settings"
         options={{
           title: "Ajustes",
           tabBarIcon: ({ color }) => (
@@ -36,4 +46,3 @@ export default function Layout() {
     </Tabs>
   );
 }
- 

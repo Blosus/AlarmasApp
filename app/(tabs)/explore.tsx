@@ -66,7 +66,7 @@ export default function TabTwoScreen() {
         </ExternalLink>
       </Collapsible>
       <Collapsible title="Light and dark mode components">
-        <TShemedText>
+        <ThemedText>
           This template has light and dark mode support. The{' '}
           <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
           what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
