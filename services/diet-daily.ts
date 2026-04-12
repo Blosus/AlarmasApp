@@ -1,11 +1,20 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { collection, doc, getDocs, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+    collection,
+    doc,
+    getDocs,
+    serverTimestamp,
+    setDoc,
+} from "firebase/firestore";
 import { auth, db } from "./firebase";
 
 export type DietDailyLog = {
   dateKey: string;
   caloriesConsumed: number;
   mealsCount: number;
+  proteinConsumed: number;
+  carbsConsumed: number;
+  fatsConsumed: number;
   caloriesTarget: number;
   goalMet: boolean;
   updatedAtMs: number;
@@ -32,8 +41,10 @@ const DAILY_STORAGE_KEY_PREFIX = "@diet_daily";
 const USERS_COLLECTION = "users";
 const DIET_SUBCOLLECTION = "diet";
 const DAILY_DOC_PREFIX = "daily_";
+export const DIET_THEORETICAL_MAX_CALORIES = 10000;
 
-const buildDailyStorageKey = (uid: string) => `${DAILY_STORAGE_KEY_PREFIX}:${uid}`;
+const buildDailyStorageKey = (uid: string) =>
+  `${DAILY_STORAGE_KEY_PREFIX}:${uid}`;
 
 const toDateKey = (date: Date): string => {
   const y = date.getFullYear();
@@ -60,17 +71,36 @@ const clamp = (value: number, min: number, max: number): number => {
 const normalizeDailyLog = (
   input: Partial<DietDailyLog>,
   caloriesTarget: number,
-  dateKey: string
+  dateKey: string,
 ): DietDailyLog => {
   const target = Math.max(0, Math.round(caloriesTarget));
-  const consumed = Math.max(0, Math.round(Number(input.caloriesConsumed ?? 0)));
-  const meals = clamp(Math.round(Number(input.mealsCount ?? 1)), 1, 5);
+  const consumed = clamp(
+    Math.round(Number(input.caloriesConsumed ?? 0) * 10) / 10,
+    0,
+    DIET_THEORETICAL_MAX_CALORIES,
+  );
+  const meals = Math.max(0, Math.round(Number(input.mealsCount ?? 0)));
+  const proteinConsumed = Math.max(
+    0,
+    Math.round(Number(input.proteinConsumed ?? 0) * 10) / 10,
+  );
+  const carbsConsumed = Math.max(
+    0,
+    Math.round(Number(input.carbsConsumed ?? 0) * 10) / 10,
+  );
+  const fatsConsumed = Math.max(
+    0,
+    Math.round(Number(input.fatsConsumed ?? 0) * 10) / 10,
+  );
   const goalMet = consumed >= target && meals >= 3;
 
   return {
     dateKey,
     caloriesConsumed: consumed,
     mealsCount: meals,
+    proteinConsumed,
+    carbsConsumed,
+    fatsConsumed,
     caloriesTarget: target,
     goalMet,
     updatedAtMs: Number(input.updatedAtMs ?? Date.now()),
@@ -106,7 +136,10 @@ async function readLocalDietDaily(uid: string): Promise<DailyLogRecord> {
   }
 }
 
-async function writeLocalDietDaily(uid: string, logs: DailyLogRecord): Promise<void> {
+async function writeLocalDietDaily(
+  uid: string,
+  logs: DailyLogRecord,
+): Promise<void> {
   try {
     await AsyncStorage.setItem(buildDailyStorageKey(uid), JSON.stringify(logs));
   } catch (error) {
@@ -137,7 +170,7 @@ async function readCloudDietDaily(uid: string): Promise<DailyLogRecord | null> {
           updatedAtMs: Number(data.updatedAtMs ?? Date.now()),
         },
         target,
-        dateKey
+        dateKey,
       );
     });
 
@@ -148,16 +181,25 @@ async function readCloudDietDaily(uid: string): Promise<DailyLogRecord | null> {
   }
 }
 
-async function writeCloudDietDailyLog(uid: string, log: DietDailyLog): Promise<void> {
+async function writeCloudDietDailyLog(
+  uid: string,
+  log: DietDailyLog,
+): Promise<void> {
   try {
-    const ref = doc(db, USERS_COLLECTION, uid, DIET_SUBCOLLECTION, `${DAILY_DOC_PREFIX}${log.dateKey}`);
+    const ref = doc(
+      db,
+      USERS_COLLECTION,
+      uid,
+      DIET_SUBCOLLECTION,
+      `${DAILY_DOC_PREFIX}${log.dateKey}`,
+    );
     await setDoc(
       ref,
       {
         ...log,
         updatedAt: serverTimestamp(),
       },
-      { merge: true }
+      { merge: true },
     );
   } catch (error) {
     console.error("Error writing cloud diet daily log:", error);
@@ -252,7 +294,7 @@ export function getTodayDateKey(): string {
 
 export async function loadTodayDietTracking(
   uid: string,
-  caloriesTarget: number
+  caloriesTarget: number,
 ): Promise<{ today: DietDailyLog; streak: DietStreakSummary }> {
   const logs = await loadMergedDietDaily(uid);
   const todayKey = getTodayDateKey();
@@ -261,7 +303,10 @@ export async function loadTodayDietTracking(
     ? normalizeDailyLog(logs[todayKey], caloriesTarget, todayKey)
     : normalizeDailyLog({}, caloriesTarget, todayKey);
 
-  if (!logs[todayKey] || logs[todayKey].caloriesTarget !== today.caloriesTarget) {
+  if (
+    !logs[todayKey] ||
+    logs[todayKey].caloriesTarget !== today.caloriesTarget
+  ) {
     logs[todayKey] = today;
     await writeLocalDietDaily(uid, logs);
     if (await canUseCloud(uid)) {
@@ -277,8 +322,14 @@ export async function loadTodayDietTracking(
 
 export async function saveTodayDietTracking(
   uid: string,
-  input: { caloriesConsumed: number; mealsCount: number },
-  caloriesTarget: number
+  input: {
+    caloriesConsumed: number;
+    mealsCount: number;
+    proteinConsumed?: number;
+    carbsConsumed?: number;
+    fatsConsumed?: number;
+  },
+  caloriesTarget: number,
 ): Promise<{ today: DietDailyLog; streak: DietStreakSummary }> {
   const logs = await loadMergedDietDaily(uid);
   const todayKey = getTodayDateKey();
@@ -289,10 +340,61 @@ export async function saveTodayDietTracking(
       dateKey: todayKey,
       caloriesConsumed: input.caloriesConsumed,
       mealsCount: input.mealsCount,
+      proteinConsumed:
+        input.proteinConsumed ?? logs[todayKey]?.proteinConsumed ?? 0,
+      carbsConsumed: input.carbsConsumed ?? logs[todayKey]?.carbsConsumed ?? 0,
+      fatsConsumed: input.fatsConsumed ?? logs[todayKey]?.fatsConsumed ?? 0,
       updatedAtMs: Date.now(),
     },
     caloriesTarget,
-    todayKey
+    todayKey,
+  );
+
+  logs[todayKey] = today;
+  await writeLocalDietDaily(uid, logs);
+
+  if (await canUseCloud(uid)) {
+    await writeCloudDietDailyLog(uid, today);
+  }
+
+  return {
+    today,
+    streak: computeStreak(logs),
+  };
+}
+
+export async function addTodayDietMealEntry(
+  uid: string,
+  input: {
+    calories: number;
+    protein?: number;
+    carbs?: number;
+    fats?: number;
+  },
+  caloriesTarget: number,
+): Promise<{ today: DietDailyLog; streak: DietStreakSummary }> {
+  const logs = await loadMergedDietDaily(uid);
+  const todayKey = getTodayDateKey();
+  const existing = normalizeDailyLog(
+    logs[todayKey] ?? {},
+    caloriesTarget,
+    todayKey,
+  );
+
+  const today = normalizeDailyLog(
+    {
+      ...existing,
+      dateKey: todayKey,
+      caloriesConsumed: existing.caloriesConsumed + Math.max(0, input.calories),
+      mealsCount: existing.mealsCount + 1,
+      proteinConsumed:
+        existing.proteinConsumed + Math.max(0, input.protein ?? 0),
+      carbsConsumed: existing.carbsConsumed + Math.max(0, input.carbs ?? 0),
+      fatsConsumed: existing.fatsConsumed + Math.max(0, input.fats ?? 0),
+      updatedAtMs: Date.now(),
+    },
+    caloriesTarget,
+    todayKey,
   );
 
   logs[todayKey] = today;
@@ -311,7 +413,7 @@ export async function saveTodayDietTracking(
 export async function loadRecentDietHistory(
   uid: string,
   caloriesTarget: number,
-  days = 7
+  days = 7,
 ): Promise<DietDailyHistoryItem[]> {
   const logs = await loadMergedDietDaily(uid);
   const totalDays = Math.max(1, Math.round(days));

@@ -10,12 +10,13 @@ import {
   scheduleAlarmNotifications,
 } from "@/services/alarms";
 import {
+  addTodayDietMealEntry,
+  DIET_THEORETICAL_MAX_CALORIES,
   DietDailyHistoryItem,
   DietDailyLog,
   DietStreakSummary,
   loadRecentDietHistory,
   loadTodayDietTracking,
-  saveTodayDietTracking,
 } from "@/services/diet-daily";
 import { getCurrentSessionUser } from "@/services/session";
 import {
@@ -64,8 +65,10 @@ export default function HomeScreen() {
     bestStreak: 0,
     completedDays: 0,
   });
-  const [caloriesConsumedText, setCaloriesConsumedText] = useState("0");
-  const [mealsCountText, setMealsCountText] = useState("0");
+  const [mealCaloriesText, setMealCaloriesText] = useState("");
+  const [mealProteinText, setMealProteinText] = useState("");
+  const [mealCarbsText, setMealCarbsText] = useState("");
+  const [mealFatsText, setMealFatsText] = useState("");
   const [isSavingDietProgress, setIsSavingDietProgress] = useState(false);
   const [isLoadingDietStatus, setIsLoadingDietStatus] = useState(true);
   const [showMealAlarmLog, setShowMealAlarmLog] = useState(false);
@@ -200,14 +203,10 @@ export default function HomeScreen() {
       setDietTodayLog(tracking.today);
       setDietRecentHistory(recentHistory);
       setDietStreak(tracking.streak);
-      setCaloriesConsumedText(String(tracking.today.caloriesConsumed));
-      setMealsCountText(String(tracking.today.mealsCount));
     } else {
       setDietTodayLog(null);
       setDietRecentHistory([]);
       setDietStreak({ currentStreak: 0, bestStreak: 0, completedDays: 0 });
-      setCaloriesConsumedText("0");
-      setMealsCountText("0");
     }
 
     setDietProfile(completed ? profile : null);
@@ -328,11 +327,26 @@ export default function HomeScreen() {
   };
   const dietInsights = buildDietInsights(dietProfile);
 
-  const handleSaveDietProgress = async () => {
+  const parseDecimalInput = (value: string): number | null => {
+    const parsed = Number(value.replace(",", ".").trim());
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return null;
+    }
+    return Math.round(parsed * 10) / 10;
+  };
+
+  const formatExactValue = (value: number): string => {
+    if (Number.isInteger(value)) {
+      return String(value);
+    }
+    return value.toFixed(1);
+  };
+
+  const handleAddMealEntry = async () => {
     if (!dietInsights) {
       Alert.alert(
         "Perfil incompleto",
-        "Completa tu perfil de dieta antes de guardar progreso diario.",
+        "Completa tu perfil de dieta antes de registrar comidas.",
       );
       return;
     }
@@ -340,37 +354,73 @@ export default function HomeScreen() {
     const sessionUser = await getCurrentSessionUser();
     const uid = sessionUser?.uid ?? "guest";
 
-    const calories = Number(caloriesConsumedText.replace(",", "."));
-    const meals = Number(mealsCountText.replace(",", "."));
+    const calories = parseDecimalInput(mealCaloriesText);
+    const protein = mealProteinText.trim().length
+      ? parseDecimalInput(mealProteinText)
+      : 0;
+    const carbs = mealCarbsText.trim().length
+      ? parseDecimalInput(mealCarbsText)
+      : 0;
+    const fats = mealFatsText.trim().length
+      ? parseDecimalInput(mealFatsText)
+      : 0;
 
-    if (!Number.isFinite(calories) || calories < 0) {
+    if (calories == null || calories <= 0) {
       Alert.alert(
         "Calorías inválidas",
-        `Ingresa un valor numérico mayor o igual a 0.`,
+        "Ingresa las calorías de esta comida con un valor mayor a 0.",
       );
       return;
     }
 
-    if (!Number.isFinite(meals) || meals < 1 || meals > 5) {
-      Alert.alert("Comidas inválidas", "Ingresa un valor entre 1 y 5 comidas.");
+    if (protein == null || carbs == null || fats == null) {
+      Alert.alert(
+        "Macros inválidos",
+        "Si agregas proteínas, carbs o grasas, usa valores numéricos válidos (0 o mayores).",
+      );
+      return;
+    }
+
+    const currentCalories = dietTodayLog?.caloriesConsumed ?? 0;
+    const remainingToCap = Math.max(
+      0,
+      DIET_THEORETICAL_MAX_CALORIES - currentCalories,
+    );
+
+    if (remainingToCap <= 0) {
+      Alert.alert(
+        "Límite teórico alcanzado",
+        `Hoy ya alcanzaste el límite teórico de ${DIET_THEORETICAL_MAX_CALORIES.toLocaleString("es-ES")} kcal.`,
+      );
       return;
     }
 
     setIsSavingDietProgress(true);
     try {
-      const saved = await saveTodayDietTracking(
+      const saved = await addTodayDietMealEntry(
         uid,
         {
-          caloriesConsumed: Math.round(calories),
-          mealsCount: Math.round(meals),
+          calories,
+          protein,
+          carbs,
+          fats,
         },
         dietInsights.recommendedCalories,
       );
 
       setDietTodayLog(saved.today);
       setDietStreak(saved.streak);
-      setCaloriesConsumedText(String(saved.today.caloriesConsumed));
-      setMealsCountText(String(saved.today.mealsCount));
+      setMealCaloriesText("");
+      setMealProteinText("");
+      setMealCarbsText("");
+      setMealFatsText("");
+
+      if (calories > remainingToCap) {
+        Alert.alert(
+          "Entrada ajustada",
+          `Se registró hasta el límite teórico diario de ${DIET_THEORETICAL_MAX_CALORIES.toLocaleString("es-ES")} kcal.`,
+        );
+      }
 
       const recentHistory = await loadRecentDietHistory(
         uid,
@@ -386,7 +436,7 @@ export default function HomeScreen() {
   const showCaloriesHelp = () => {
     Alert.alert(
       "Ayuda calorias",
-      "Ingresa una estimación de lo que comiste hoy. Puedes usar etiquetas nutricionales o una app para sumar calorías.",
+      "Registra las calorías de cada comida y presiona 'Agregar comida'. El total del día se va acumulando automáticamente.",
     );
   };
 
@@ -601,14 +651,45 @@ export default function HomeScreen() {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Seguimiento de hoy</Text>
           <Text style={styles.dailyStatusText}>
-            Meta del día: consumir {dietInsights.recommendedCalories} kcal y al
-            menos 3 comidas.
+            Meta del día: {dietInsights.recommendedCalories} kcal y al menos 3
+            comidas. Puedes registrar calorías por encima de tu objetivo, dentro
+            de un marco teórico de{" "}
+            {DIET_THEORETICAL_MAX_CALORIES.toLocaleString("es-ES")} kcal.
           </Text>
+
+          <View style={styles.dailyStatusBadgePending}>
+            <View style={styles.dietDetailRow}>
+              <Text style={styles.dietDetailLabel}>
+                Calorías consumidas hoy
+              </Text>
+              <Text style={styles.dietDetailValue}>
+                {formatExactValue(dietTodayLog?.caloriesConsumed ?? 0)} kcal
+              </Text>
+            </View>
+            <View style={styles.dietDetailRow}>
+              <Text style={styles.dietDetailLabel}>Comidas registradas</Text>
+              <Text style={styles.dietDetailValue}>
+                {dietTodayLog?.mealsCount ?? 0}
+              </Text>
+            </View>
+            <View style={styles.dietDetailRow}>
+              <Text style={styles.dietDetailLabel}>
+                Balance contra objetivo
+              </Text>
+              <Text style={styles.dietDetailValue}>
+                {formatExactValue(
+                  (dietTodayLog?.caloriesConsumed ?? 0) -
+                    dietInsights.recommendedCalories,
+                )}{" "}
+                kcal
+              </Text>
+            </View>
+          </View>
 
           <View style={styles.dailyInputGroup}>
             <View style={styles.dailyLabelRow}>
               <Text style={styles.dailyInputLabel}>
-                Calorías consumidas (min 0)
+                Calorías de esta comida
               </Text>
               <TouchableOpacity
                 style={styles.helpIconButton}
@@ -624,9 +705,9 @@ export default function HomeScreen() {
             <View style={styles.dailyInputRow}>
               <Ionicons name="flame-outline" size={18} color={colors.accent} />
               <TextInput
-                value={caloriesConsumedText}
-                onChangeText={setCaloriesConsumedText}
-                keyboardType="number-pad"
+                value={mealCaloriesText}
+                onChangeText={setMealCaloriesText}
+                keyboardType="decimal-pad"
                 style={styles.dailyInput}
                 placeholder="0"
                 placeholderTextColor={placeholderColor}
@@ -635,26 +716,52 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <View style={styles.dailyInputGroup}>
-            <Text style={styles.dailyInputLabel}>
-              Comidas realizadas (1 - 5)
+          <Text style={styles.dailyInputLabel}>
+            Macros opcionales de esta comida
+          </Text>
+          <View style={styles.customFoodGridRow}>
+            <TextInput
+              value={mealProteinText}
+              onChangeText={setMealProteinText}
+              keyboardType="decimal-pad"
+              style={styles.customFoodInputHalf}
+              placeholder="Proteína (g)"
+              placeholderTextColor={placeholderColor}
+            />
+            <TextInput
+              value={mealCarbsText}
+              onChangeText={setMealCarbsText}
+              keyboardType="decimal-pad"
+              style={styles.customFoodInputHalf}
+              placeholder="Carbs (g)"
+              placeholderTextColor={placeholderColor}
+            />
+          </View>
+          <View style={[styles.customFoodGridRow, { marginTop: 8 }]}>
+            <TextInput
+              value={mealFatsText}
+              onChangeText={setMealFatsText}
+              keyboardType="decimal-pad"
+              style={styles.customFoodInputHalf}
+              placeholder="Grasas (g)"
+              placeholderTextColor={placeholderColor}
+            />
+          </View>
+
+          <View
+            style={[styles.dailyStatusBadge, styles.dailyStatusBadgePending]}
+          >
+            <Ionicons
+              name="analytics-outline"
+              size={18}
+              color={colors.textSecondary}
+            />
+            <Text style={styles.dailyStatusBadgeText}>
+              Totales macro hoy: P{" "}
+              {formatExactValue(dietTodayLog?.proteinConsumed ?? 0)} g • C{" "}
+              {formatExactValue(dietTodayLog?.carbsConsumed ?? 0)} g • G{" "}
+              {formatExactValue(dietTodayLog?.fatsConsumed ?? 0)} g
             </Text>
-            <View style={styles.dailyInputRow}>
-              <Ionicons
-                name="restaurant-outline"
-                size={18}
-                color={colors.accent}
-              />
-              <TextInput
-                value={mealsCountText}
-                onChangeText={setMealsCountText}
-                keyboardType="number-pad"
-                style={styles.dailyInput}
-                placeholder="0"
-                placeholderTextColor={placeholderColor}
-              />
-              <Text style={styles.dailyInputSuffix}>comidas</Text>
-            </View>
           </View>
 
           <View
@@ -682,13 +789,11 @@ export default function HomeScreen() {
               styles.dietEditButton,
               isSavingDietProgress && { opacity: 0.6 },
             ]}
-            onPress={handleSaveDietProgress}
+            onPress={handleAddMealEntry}
             disabled={isSavingDietProgress}
           >
-            <Text style={styles.dietEditButtonText}>
-              Guardar progreso de hoy
-            </Text>
-            <Feather name="save" size={16} color={colors.background} />
+            <Text style={styles.dietEditButtonText}>Agregar comida al día</Text>
+            <Feather name="plus" size={16} color={colors.background} />
           </TouchableOpacity>
         </View>
 
