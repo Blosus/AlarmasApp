@@ -26,6 +26,7 @@ function RootNavigator() {
         <Stack.Screen name="registro" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="diet-setup" options={{ headerShown: false }} />
+        <Stack.Screen name="foods" options={{ headerShown: false }} />
         <Stack.Screen name="new-food" options={{ headerShown: false }} />
         <Stack.Screen
           name="modal"
